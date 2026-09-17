@@ -82,7 +82,7 @@ Provider secrets are exposed only to the AI-review job; deterministic project-co
 
 ## Tests
 
-Final local regression/security suite: **86/86 passing** before packaging.
+Final local regression/security suite: **88/88 passing** before publication.
 
 Coverage includes:
 
@@ -102,9 +102,10 @@ Coverage includes:
 - duplicate/key-id safety;
 - no API-key leakage in routing telemetry;
 - direct OpenAI/Anthropic adapter contract;
-- workflow secret isolation and v1.2.0 pin alignment.
+- workflow secret isolation and v1.2.0 pin alignment;
+- canonical central-repository identity checks that reject stale references to the pre-APES repository name.
 
-JavaScript syntax, JSON parsing, and YAML parsing also pass.
+JavaScript syntax, JSON parsing, and YAML parsing also pass locally.
 
 ## Deliberate limitation
 
