@@ -1,0 +1,21 @@
+name: AI Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  call-apes-v1:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: jflowdking212/ai-production-engineering-standard/.github/workflows/ai-review.yml@v1.2.0
+    with:
+      pipeline_ref: v1.2.0
+      config_path: .apes.json
+    secrets:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_API_KEYS_JSON: ${{ secrets.GEMINI_API_KEYS_JSON }}

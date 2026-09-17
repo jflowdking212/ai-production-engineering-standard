@@ -1,0 +1,10 @@
+# APES central repository ownership
+* @jflowdking212
+
+# Security-critical paths
+/.github/workflows/ @jflowdking212
+/scripts/ @jflowdking212
+/docs/SECURITY_POLICY.md @jflowdking212
+/docs/AI_REVIEW_POLICY.md @jflowdking212
+/docs/HERMES_ROUTING.md @jflowdking212
+/templates/project-repo/.github/ @jflowdking212

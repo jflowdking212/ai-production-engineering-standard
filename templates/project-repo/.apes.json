@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "runtime": {
+    "type": "node",
+    "requiredScripts": ["typecheck", "test", "build"],
+    "optionalScripts": ["lint"],
+    "allowUnlockedInstall": false
+  },
+  "risk": {
+    "additionalCriticalPaths": [],
+    "additionalHighPaths": [],
+    "additionalLowPaths": []
+  },
+  "context": {
+    "documents": ["docs/PROJECT_ARCHITECTURE.md", "docs/BUSINESS_RULES.md", "docs/SECURITY_POLICY.md"],
+    "includeChangedFiles": true,
+    "includeDirectImports": true,
+    "maxContextChars": 50000,
+    "maxPerFileChars": 12000
+  },
+  "review": {
+    "allowedExternalProviders": [],
+    "maxChunkChars": 45000,
+    "maxChunks": 12,
+    "requestTimeoutMs": 90000,
+    "routing": {
+      "mode": "auto",
+      "allowMixedPrimary": false,
+      "providerPreference": {
+        "medium": ["openai", "anthropic", "openrouter"],
+        "strong": ["anthropic", "openai", "openrouter"],
+        "advanced": ["anthropic", "openai", "openrouter"]
+      },
+      "geminiPool": {
+        "cooldown429Ms": 60000,
+        "transientCooldownMs": 5000,
+        "maxRetriesPerCredential": 1,
+        "backoffBaseMs": 500
+      }
+    }
+  },
+  "security": {
+    "dependencyAudit": "required"
+  }
+}

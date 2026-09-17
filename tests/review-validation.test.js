@@ -1,0 +1,16 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { diffLineIndex } = require('../scripts/lib');
+const { normalizeReview, chunkDiff, parseJsonObject } = require('../scripts/call-review-gateway');
+const diff = `diff --git a/src/x.ts b/src/x.ts\n--- a/src/x.ts\n+++ b/src/x.ts\n@@ -1,2 +1,2 @@\n-const authz = enforceTenant();\n+const b = 2;\n const a = 1;`;
+const index = diffLineIndex(diff);
+test('recomputes blocking verdict from RIGHT-side findings', () => { const out = normalizeReview({ verdict: 'PASS', p0_count: 0, findings: [{ path: 'src/x.ts', line: 1, side: 'RIGHT', severity: 'P1', comment: 'Authorization is missing.' }] }, index); assert.equal(out.verdict, 'BLOCK'); assert.equal(out.p1_count, 1); assert.equal(out.findings[0].side, 'RIGHT'); });
+test('accepts LEFT-side findings for removed security logic', () => { const out = normalizeReview({ findings: [{ path: 'src/x.ts', line: 1, side: 'LEFT', severity: 'P1', comment: 'The tenant authorization guard was removed.' }] }, index); assert.equal(out.verdict, 'BLOCK'); assert.equal(out.findings[0].side, 'LEFT'); });
+test('rejects unsupported severity', () => { assert.throws(() => normalizeReview({ findings: [{ path: 'src/x.ts', line: 1, side: 'RIGHT', severity: 'P9', comment: 'bad' }] }, index)); });
+test('rejects finding on an invalid side/line pairing', () => { assert.throws(() => normalizeReview({ findings: [{ path: 'src/x.ts', line: 2, side: 'LEFT', severity: 'P1', comment: 'bad' }] }, index)); });
+test('rejects unsupported diff side', () => { assert.throws(() => normalizeReview({ findings: [{ path: 'src/x.ts', line: 1, side: 'MIDDLE', severity: 'P1', comment: 'bad' }] }, index)); });
+test('parses fenced JSON defensively', () => { assert.deepEqual(parseJsonObject('```json\n{"findings":[]}\n```'), { findings: [] }); });
+test('chunker does not silently truncate and rejects excessive coverage', () => { const sections = Array.from({ length: 4 }, (_, i) => `diff --git a/f${i}.ts b/f${i}.ts\n--- a/f${i}.ts\n+++ b/f${i}.ts\n@@ -0,0 +1,1 @@\n+${'x'.repeat(100)}\n`).join(''); assert.throws(() => chunkDiff(sections, 180, 2), /maximum/); });
+test('malformed reviewer JSON fails closed at parser', () => { assert.throws(() => parseJsonObject('not-json'), /no JSON object/); });
+test('inline comment API failure rejects instead of being ignored', async () => { const { postInlineComment } = require('../scripts/call-review-gateway'); const oldFetch = global.fetch; global.fetch = async () => ({ ok: false, status: 403, text: async () => 'forbidden' }); try { await assert.rejects(() => postInlineComment('o', 'r', '1', 'abc', { path: 'src/x.ts', line: 1, side: 'LEFT', severity: 'P1', comment: 'bad' }), /Failed to post required inline review comment/); } finally { global.fetch = oldFetch; } });
+test('accepts a boolean escalation request but rejects malformed escalation metadata', () => { const out = normalizeReview({ needs_escalation: true, findings: [] }, index); assert.equal(out.needs_escalation, true); assert.throws(() => normalizeReview({ needs_escalation: 'yes', findings: [] }, index), /needs_escalation/); });

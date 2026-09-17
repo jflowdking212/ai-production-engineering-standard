@@ -1,0 +1,10 @@
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example

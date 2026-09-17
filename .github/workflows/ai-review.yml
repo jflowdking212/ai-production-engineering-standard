@@ -1,0 +1,291 @@
+name: APES AI Review Gate (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_ref:
+        description: Stable APES release/tag used to fetch central scripts
+        required: false
+        default: v1.2.0
+        type: string
+      config_path:
+        description: Project-local APES JSON configuration path
+        required: false
+        default: .apes.json
+        type: string
+    secrets:
+      OPENROUTER_API_KEY:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+      GEMINI_API_KEY:
+        required: false
+      GEMINI_API_KEYS_JSON:
+        required: false
+
+concurrency:
+  group: apes-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  ref-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Reject mutable or ambiguous APES pipeline refs
+        shell: bash
+        env:
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$PIPELINE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$PIPELINE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Approved immutable-style APES ref: $PIPELINE_REF"
+          else
+            echo "Refusing mutable/ambiguous APES pipeline_ref: $PIPELINE_REF" >&2
+            echo "Use an exact semantic-version release tag (for example v1.2.0) or, preferably, a reviewed 40-character commit SHA." >&2
+            exit 1
+          fi
+
+  risk-classify:
+    needs: ref-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      risk: ${{ steps.classify.outputs.risk }}
+      model_tier: ${{ steps.classify.outputs.model_tier }}
+      human_approval_required: ${{ steps.classify.outputs.human_approval_required }}
+    steps:
+      - name: Checkout project PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: project
+          persist-credentials: false
+      - name: Checkout pinned APES pipeline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jflowdking212/ai-production-engineering-standard
+          ref: ${{ inputs.pipeline_ref }}
+          path: pipeline
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+      - name: Resolve trusted base-branch APES policy
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}/project
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REQUESTED_CONFIG_PATH: ${{ inputs.config_path }}
+          OUTPUT_PATH: /tmp/apes-trusted.json
+        run: node pipeline/scripts/materialize-trusted-config.js
+      - name: Produce changed-file list and full diff
+        run: |
+          cd project
+          git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" > /tmp/changed_files.txt
+          git diff --no-ext-diff --unified=80 "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" > /tmp/pr.diff
+          test -s /tmp/changed_files.txt
+      - name: Deterministically classify risk
+        id: classify
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}/project
+          APES_CONFIG_PATH: /tmp/apes-trusted.json
+          CHANGED_FILES_FILE: /tmp/changed_files.txt
+          DIFF_TEXT_PATH: /tmp/pr.diff
+        run: node pipeline/scripts/classify-risk.js
+
+  security-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    needs: risk-classify
+    steps:
+      - name: Checkout project PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: project
+          persist-credentials: false
+      - name: Checkout pinned APES pipeline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jflowdking212/ai-production-engineering-standard
+          ref: ${{ inputs.pipeline_ref }}
+          path: pipeline
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+      - name: Resolve trusted base-branch APES policy
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}/project
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REQUESTED_CONFIG_PATH: ${{ inputs.config_path }}
+          OUTPUT_PATH: /tmp/apes-trusted.json
+        run: node pipeline/scripts/materialize-trusted-config.js
+      - name: Produce full diff
+        run: |
+          cd project
+          git diff --no-ext-diff --unified=80 "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" > /tmp/pr.diff
+      - name: Block potential secrets before any external AI call
+        env:
+          DIFF_TEXT_PATH: /tmp/pr.diff
+        run: node pipeline/scripts/scan-secrets.js
+      - name: Dependency vulnerability audit (project policy)
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}/project
+          APES_CONFIG_PATH: /tmp/apes-trusted.json
+        run: |
+          corepack enable || true
+          node pipeline/scripts/audit-dependencies.js
+
+  deterministic-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    needs: risk-classify
+    steps:
+      - name: Checkout project PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: project
+          persist-credentials: false
+      - name: Checkout pinned APES pipeline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jflowdking212/ai-production-engineering-standard
+          ref: ${{ inputs.pipeline_ref }}
+          path: pipeline
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+      - name: Resolve trusted base-branch APES policy
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}/project
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REQUESTED_CONFIG_PATH: ${{ inputs.config_path }}
+          OUTPUT_PATH: /tmp/apes-trusted.json
+        run: node pipeline/scripts/materialize-trusted-config.js
+      - name: Enable Corepack when available
+        run: corepack enable || true
+      - name: Run required repository-native validation
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}/project
+          APES_CONFIG_PATH: /tmp/apes-trusted.json
+        run: node pipeline/scripts/run-validation.js
+
+  ai-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+    needs: [risk-classify, deterministic-checks, security-scan]
+    if: ${{ success() && needs.risk-classify.outputs.model_tier != 'skip' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
+    outputs:
+      verdict: ${{ steps.review.outputs.verdict }}
+      p0_count: ${{ steps.review.outputs.p0_count }}
+      p1_count: ${{ steps.review.outputs.p1_count }}
+      p2_count: ${{ steps.review.outputs.p2_count }}
+      reviewed_chunks: ${{ steps.review.outputs.reviewed_chunks }}
+    steps:
+      - name: Checkout project PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: project
+          persist-credentials: false
+      - name: Checkout pinned APES pipeline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jflowdking212/ai-production-engineering-standard
+          ref: ${{ inputs.pipeline_ref }}
+          path: pipeline
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+      - name: Resolve trusted base-branch APES policy
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}/project
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REQUESTED_CONFIG_PATH: ${{ inputs.config_path }}
+          OUTPUT_PATH: /tmp/apes-trusted.json
+        run: node pipeline/scripts/materialize-trusted-config.js
+      - name: Produce full review diff and changed-file list
+        run: |
+          cd project
+          git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" > /tmp/changed_files.txt
+          git diff --no-ext-diff --unified=80 "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" > /tmp/pr.diff
+      - name: Run bounded, fail-closed AI review
+        id: review
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEYS_JSON: ${{ secrets.GEMINI_API_KEYS_JSON }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PROJECT_ROOT: ${{ github.workspace }}/project
+          APES_CONFIG_PATH: /tmp/apes-trusted.json
+          RISK_TIER: ${{ needs.risk-classify.outputs.risk }}
+          MODEL_TIER: ${{ needs.risk-classify.outputs.model_tier }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          DIFF_TEXT_PATH: /tmp/pr.diff
+          CHANGED_FILES_FILE: /tmp/changed_files.txt
+        run: node pipeline/scripts/call-review-gateway.js
+
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    needs: [ref-guard, risk-classify, deterministic-checks, security-scan, ai-review]
+    if: always()
+    steps:
+      - name: Fail closed on invalid APES pipeline ref
+        if: ${{ needs.ref-guard.result != 'success' }}
+        run: |
+          echo "APES pipeline ref validation failed; refusing to evaluate the gate with untrusted/mutable pipeline code." >&2
+          exit 1
+      - name: Checkout pinned APES pipeline
+        if: ${{ needs.ref-guard.result == 'success' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jflowdking212/ai-production-engineering-standard
+          ref: ${{ inputs.pipeline_ref }}
+          path: pipeline
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: ${{ needs.ref-guard.result == 'success' }}
+        with:
+          node-version: "20"
+      - name: Enforce machine controls and severity thresholds (fail closed)
+        if: ${{ needs.ref-guard.result == 'success' }}
+        env:
+          RISK_RESULT: ${{ needs.risk-classify.result }}
+          VALIDATION_RESULT: ${{ needs.deterministic-checks.result }}
+          SECURITY_RESULT: ${{ needs.security-scan.result }}
+          AI_RESULT: ${{ needs.ai-review.result }}
+          MODEL_TIER: ${{ needs.risk-classify.outputs.model_tier }}
+          VERDICT: ${{ needs.ai-review.outputs.verdict }}
+          P0_COUNT: ${{ needs.ai-review.outputs.p0_count }}
+          P1_COUNT: ${{ needs.ai-review.outputs.p1_count }}
+          RESTRICTED_PR: ${{ github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]' }}
+        run: node pipeline/scripts/enforce-gate.js

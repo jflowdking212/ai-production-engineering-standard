@@ -1,0 +1,10 @@
+# Rename to CODEOWNERS and replace the placeholder owner before enabling.
+# Keep APES/security-control changes independently reviewed.
+/.apes.json @YOUR_SECURITY_OWNER
+/.github/workflows/ @YOUR_SECURITY_OWNER
+/.github/CODEOWNERS @YOUR_SECURITY_OWNER
+/AI_AGENT_INSTRUCTIONS.md @YOUR_SECURITY_OWNER
+/AGENTS.md @YOUR_SECURITY_OWNER
+/CLAUDE.md @YOUR_SECURITY_OWNER
+/docs/AI_REVIEW_POLICY.md @YOUR_SECURITY_OWNER
+/docs/SECURITY_POLICY.md @YOUR_SECURITY_OWNER
